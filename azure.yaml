@@ -1,0 +1,25 @@
+name: confseeker
+services:
+  - name: confseeker-api
+    project: .
+    language: python
+    host: appservice
+    region: westeurope
+    sku: F1
+    os: linux
+    runtime: python:3.9
+    env:
+      - name: DATABASE_URL
+        value: ${AZURE_SQL_CONNECTION_STRING}
+      - name: SMTP_SERVER
+        value: ${SMTP_SERVER}
+      - name: SMTP_PORT
+        value: ${SMTP_PORT}
+      - name: SMTP_USERNAME
+        value: ${SMTP_USERNAME}
+      - name: SMTP_PASSWORD
+        value: ${SMTP_PASSWORD}
+      - name: NOTIFICATION_EMAIL
+        value: ${NOTIFICATION_EMAIL}
+      - name: SIMILARITY_THRESHOLD
+        value: ${SIMILARITY_THRESHOLD} 
