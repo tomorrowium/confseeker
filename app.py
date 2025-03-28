@@ -95,6 +95,10 @@ def run_scheduler():
 scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
 scheduler_thread.start()
 
+@app.route('/')
+def index():
+    return jsonify({"message": "Conference Seeker API is running!"})
+
 @app.route('/api/conferences', methods=['GET'])
 def get_conferences():
     conferences = Conference.query.all()
