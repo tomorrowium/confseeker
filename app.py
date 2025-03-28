@@ -3,7 +3,6 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime
 import os
-from confseeker import ConferenceTracker
 import schedule
 import time
 import threading
@@ -23,6 +22,9 @@ CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///conferences.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
+# Initialize sentence transformer model
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Conference model
 class Conference(db.Model):
@@ -49,8 +51,40 @@ class Conference(db.Model):
 with app.app_context():
     db.create_all()
 
-# Initialize conference tracker
-tracker = ConferenceTracker()
+def _calculate_similarity(text1, text2):
+    """Calculate semantic similarity between two texts."""
+    embeddings = model.encode([text1, text2])
+    similarity = float(pd.DataFrame(embeddings).corr().iloc[0, 1])
+    return similarity
+
+def _search_conference(conference):
+    """Search for conference updates using Google."""
+    search_query = f"{conference['name']} {conference['year'] + 1} conference"
+    url = f"https://www.google.com/search?q={search_query}"
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        results = []
+        
+        for result in soup.find_all('div', class_='g'):
+            title_elem = result.find('h3')
+            link_elem = result.find('a')
+            if title_elem and link_elem:
+                results.append({
+                    'title': title_elem.text,
+                    'link': link_elem['href'],
+                    'source': 'Google Search'
+                })
+        
+        return results[:5]  # Return top 5 results
+    except Exception as e:
+        print(f"Error searching for conference: {e}")
+        return []
 
 def run_scheduler():
     while True:
@@ -112,8 +146,8 @@ def check_conferences():
         conf.status = 'Checking...'
         db.session.commit()
         
-        # Convert database model to tracker format
-        tracker_conf = {
+        # Convert database model to search format
+        search_conf = {
             'name': conf.name,
             'year': conf.year,
             'keywords': conf.keywords.split(','),
@@ -121,7 +155,7 @@ def check_conferences():
         }
         
         # Search for updates
-        search_results = tracker._search_conference(tracker_conf)
+        search_results = _search_conference(search_conf)
         
         # Update status
         conf.status = 'Checked'
@@ -130,7 +164,7 @@ def check_conferences():
         
         # Add results
         for result in search_results:
-            similarity = tracker._calculate_similarity(conf.name, result['title'])
+            similarity = _calculate_similarity(conf.name, result['title'])
             if similarity > float(os.getenv('SIMILARITY_THRESHOLD', 0.7)):
                 results.append({
                     'conference_id': conf.id,
