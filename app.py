@@ -8,7 +8,8 @@ import time
 import threading
 import requests
 from bs4 import BeautifulSoup
-from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
 from dateutil import parser
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
@@ -22,8 +23,8 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///con
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# Initialize sentence transformer model
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Initialize TF-IDF vectorizer
+vectorizer = TfidfVectorizer()
 
 # Initialize Azure Service Bus client
 servicebus_client = ServiceBusClient.from_connection_string(
@@ -59,10 +60,14 @@ with app.app_context():
     db.create_all()
 
 def _calculate_similarity(text1, text2):
-    """Calculate semantic similarity between two texts."""
-    embeddings = model.encode([text1, text2])
-    similarity = float(pd.DataFrame(embeddings).corr().iloc[0, 1])
-    return similarity
+    """Calculate semantic similarity between two texts using TF-IDF and cosine similarity."""
+    try:
+        tfidf_matrix = vectorizer.fit_transform([text1, text2])
+        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        return float(similarity)
+    except Exception as e:
+        print(f"Error calculating similarity: {e}")
+        return 0.0
 
 def _search_conference(conference):
     """Search for conference updates using Google."""

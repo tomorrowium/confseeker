@@ -3,11 +3,12 @@ import json
 import time
 import schedule
 import requests
-from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from azure.storage.queue import QueueClient
 from azure.communication.email import EmailClient
 from bs4 import BeautifulSoup
 from datetime import datetime
-from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
 import pandas as pd
 from typing import List, Dict, Optional
@@ -20,17 +21,15 @@ load_dotenv()
 class ConferenceTracker:
     def __init__(self):
         self.conferences_file = "conferences.json"
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.vectorizer = TfidfVectorizer()
         self.conferences = self._load_conferences()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        # Initialize Azure Service Bus client
-        self.servicebus_client = ServiceBusClient.from_connection_string(
-            os.getenv('AZURE_SERVICEBUS_CONNECTION_STRING')
-        )
-        self.notification_queue = self.servicebus_client.get_queue_client(
-            os.getenv('AZURE_SERVICEBUS_QUEUE_NAME')
+        # Initialize Azure Queue Storage client
+        self.queue_client = QueueClient.from_connection_string(
+            os.getenv('AZURE_STORAGE_CONNECTION_STRING'),
+            os.getenv('AZURE_STORAGE_QUEUE_NAME')
         )
         # Initialize Azure Communication Services Email client
         self.email_client = EmailClient.from_connection_string(
@@ -62,11 +61,14 @@ class ConferenceTracker:
         self._save_conferences()
 
     def _calculate_similarity(self, text1: str, text2: str) -> float:
-        """Calculate similarity between two texts using sentence transformers."""
-        embedding1 = self.model.encode(text1, convert_to_tensor=True)
-        embedding2 = self.model.encode(text2, convert_to_tensor=True)
-        similarity = embedding1 @ embedding2.T
-        return float(similarity[0][0])
+        """Calculate similarity between two texts using TF-IDF and cosine similarity."""
+        try:
+            tfidf_matrix = self.vectorizer.fit_transform([text1, text2])
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            return float(similarity)
+        except Exception as e:
+            print(f"Error calculating similarity: {e}")
+            return 0.0
 
     def _search_google(self, query: str) -> List[Dict]:
         """Search Google for conference information."""
@@ -143,7 +145,7 @@ class ConferenceTracker:
         return results
 
     def _send_notification(self, conference: Dict, match: Dict):
-        """Send notification about a potential conference match using Azure Communication Services."""
+        """Send notification about a potential conference match using Azure Communication Services and Queue Storage."""
         try:
             # Prepare email content
             subject = f"Potential Conference Match: {conference['name']}"
@@ -175,23 +177,20 @@ class ConferenceTracker:
             self.email_client.send(message)
             print(f"Email notification sent for {conference['name']}")
             
-            # Also send to Service Bus for other potential integrations
-            servicebus_message = ServiceBusMessage(
-                json.dumps({
-                    "type": "conference_match",
-                    "conference_name": conference['name'],
-                    "conference_year": conference['year'],
-                    "match_title": match['title'],
-                    "source": match['source'],
-                    "link": match['link'],
-                    "similarity_score": self._calculate_similarity(conference['name'], match['title']),
-                    "timestamp": datetime.now().isoformat()
-                }),
-                content_type="application/json"
-            )
+            # Also send to Queue Storage for other potential integrations
+            queue_message = {
+                "type": "conference_match",
+                "conference_name": conference['name'],
+                "conference_year": conference['year'],
+                "match_title": match['title'],
+                "source": match['source'],
+                "link": match['link'],
+                "similarity_score": self._calculate_similarity(conference['name'], match['title']),
+                "timestamp": datetime.now().isoformat()
+            }
             
-            self.notification_queue.send_messages(servicebus_message)
-            print(f"Service Bus notification sent for {conference['name']}")
+            self.queue_client.send_message(json.dumps(queue_message))
+            print(f"Queue Storage notification sent for {conference['name']}")
             
         except Exception as e:
             print(f"Error sending notification: {e}")
