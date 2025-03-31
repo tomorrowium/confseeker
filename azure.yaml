@@ -11,15 +11,11 @@ services:
     env:
       - name: DATABASE_URL
         value: ${AZURE_SQL_CONNECTION_STRING}
-      - name: SMTP_SERVER
-        value: ${SMTP_SERVER}
-      - name: SMTP_PORT
-        value: ${SMTP_PORT}
-      - name: SMTP_USERNAME
-        value: ${SMTP_USERNAME}
-      - name: SMTP_PASSWORD
-        value: ${SMTP_PASSWORD}
-      - name: NOTIFICATION_EMAIL
-        value: ${NOTIFICATION_EMAIL}
+      - name: AZURE_SERVICEBUS_CONNECTION_STRING
+        value: ${AZURE_SERVICEBUS_CONNECTION_STRING}
+      - name: AZURE_SERVICEBUS_QUEUE_NAME
+        value: ${AZURE_SERVICEBUS_QUEUE_NAME}
       - name: SIMILARITY_THRESHOLD
-        value: ${SIMILARITY_THRESHOLD} 
+        value: ${SIMILARITY_THRESHOLD}
+      - name: API_URL
+        value: ${API_URL} 

@@ -11,9 +11,8 @@ from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
 import pandas as pd
 from dateutil import parser
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -25,6 +24,14 @@ db = SQLAlchemy(app)
 
 # Initialize sentence transformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Initialize Azure Service Bus client
+servicebus_client = ServiceBusClient.from_connection_string(
+    os.getenv('AZURE_SERVICEBUS_CONNECTION_STRING')
+)
+notification_queue = servicebus_client.get_queue_client(
+    os.getenv('AZURE_SERVICEBUS_QUEUE_NAME')
+)
 
 # Conference model
 class Conference(db.Model):
@@ -141,6 +148,30 @@ def delete_conference(conference_id):
     db.session.commit()
     return '', 204
 
+def _send_notification(conference, result):
+    """Send notification about a potential conference match using Azure Service Bus."""
+    try:
+        message = {
+            "type": "conference_match",
+            "conference_name": conference.name,
+            "conference_year": conference.year,
+            "match_title": result['title'],
+            "source": result['source'],
+            "link": result['link'],
+            "similarity_score": _calculate_similarity(conference.name, result['title']),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        servicebus_message = ServiceBusMessage(
+            json.dumps(message),
+            content_type="application/json"
+        )
+        
+        notification_queue.send_messages(servicebus_message)
+        print(f"Notification sent for {conference.name}")
+    except Exception as e:
+        print(f"Error sending notification: {e}")
+
 @app.route('/api/conferences/check', methods=['POST'])
 def check_conferences():
     conferences = Conference.query.all()
@@ -166,7 +197,7 @@ def check_conferences():
         conf.last_checked = datetime.utcnow()
         db.session.commit()
         
-        # Add results
+        # Add results and send notifications
         for result in search_results:
             similarity = _calculate_similarity(conf.name, result['title'])
             if similarity > float(os.getenv('SIMILARITY_THRESHOLD', 0.7)):
@@ -178,6 +209,7 @@ def check_conferences():
                     'link': result['link'],
                     'similarity': similarity
                 })
+                _send_notification(conf, result)
     
     return jsonify(results)
 
