@@ -3,9 +3,8 @@ import json
 import time
 import schedule
 import requests
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from azure.communication.email import EmailClient
 from bs4 import BeautifulSoup
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
@@ -26,6 +25,17 @@ class ConferenceTracker:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+        # Initialize Azure Service Bus client
+        self.servicebus_client = ServiceBusClient.from_connection_string(
+            os.getenv('AZURE_SERVICEBUS_CONNECTION_STRING')
+        )
+        self.notification_queue = self.servicebus_client.get_queue_client(
+            os.getenv('AZURE_SERVICEBUS_QUEUE_NAME')
+        )
+        # Initialize Azure Communication Services Email client
+        self.email_client = EmailClient.from_connection_string(
+            os.getenv('AZURE_COMMUNICATION_CONNECTION_STRING')
+        )
 
     def _load_conferences(self) -> List[Dict]:
         """Load conferences from JSON file."""
@@ -132,14 +142,11 @@ class ConferenceTracker:
         
         return results
 
-    def _send_email_notification(self, conference: Dict, match: Dict):
-        """Send email notification about a potential conference match."""
+    def _send_notification(self, conference: Dict, match: Dict):
+        """Send notification about a potential conference match using Azure Communication Services."""
         try:
-            msg = MIMEMultipart()
-            msg['From'] = os.getenv('SMTP_USERNAME')
-            msg['To'] = os.getenv('NOTIFICATION_EMAIL')
-            msg['Subject'] = f"Potential Conference Match: {conference['name']}"
-            
+            # Prepare email content
+            subject = f"Potential Conference Match: {conference['name']}"
             body = f"""
             A potential match has been found for the conference you're tracking:
             
@@ -151,17 +158,43 @@ class ConferenceTracker:
             Similarity Score: {self._calculate_similarity(conference['name'], match['title']):.2f}
             """
             
-            msg.attach(MIMEText(body, 'plain'))
+            # Send email using Azure Communication Services
+            message = {
+                "content": {
+                    "subject": subject,
+                    "plainText": body,
+                    "html": body.replace('\n', '<br>')
+                },
+                "recipients": {
+                    "to": [{"address": os.getenv('NOTIFICATION_EMAIL')}]
+                },
+                "senderAddress": os.getenv('AZURE_COMMUNICATION_SENDER_EMAIL')
+            }
             
-            server = smtplib.SMTP(os.getenv('SMTP_SERVER'), int(os.getenv('SMTP_PORT')))
-            server.starttls()
-            server.login(os.getenv('SMTP_USERNAME'), os.getenv('SMTP_PASSWORD'))
-            server.send_message(msg)
-            server.quit()
-            
+            # Send the email
+            self.email_client.send(message)
             print(f"Email notification sent for {conference['name']}")
+            
+            # Also send to Service Bus for other potential integrations
+            servicebus_message = ServiceBusMessage(
+                json.dumps({
+                    "type": "conference_match",
+                    "conference_name": conference['name'],
+                    "conference_year": conference['year'],
+                    "match_title": match['title'],
+                    "source": match['source'],
+                    "link": match['link'],
+                    "similarity_score": self._calculate_similarity(conference['name'], match['title']),
+                    "timestamp": datetime.now().isoformat()
+                }),
+                content_type="application/json"
+            )
+            
+            self.notification_queue.send_messages(servicebus_message)
+            print(f"Service Bus notification sent for {conference['name']}")
+            
         except Exception as e:
-            print(f"Error sending email notification: {e}")
+            print(f"Error sending notification: {e}")
 
     def check_conferences(self):
         """Check all conferences for updates."""
@@ -177,7 +210,7 @@ class ConferenceTracker:
                 
                 if similarity > float(os.getenv('SIMILARITY_THRESHOLD', 0.7)):
                     print(f"Potential match found for {conference['name']}")
-                    self._send_email_notification(conference, result)
+                    self._send_notification(conference, result)
                     
             conference['last_checked'] = datetime.now().isoformat()
         
